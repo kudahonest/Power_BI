@@ -1,0 +1,307 @@
+// ============================================================
+// PROJECT 3: Power BI Revenue Dashboard
+// FILE:      all_measures.dax
+// PURPOSE:   All DAX measures for the Revenue Dashboard.
+//            Copy each measure into Power BI Desktop:
+//            Home > New Measure > paste the formula.
+//
+// ORGANISATION: Create a dedicated "Measures" table by
+// creating a blank table and naming it "_Measures".
+// Store all measures there to keep the model clean.
+// ============================================================
+
+
+// ════════════════════════════════════════════════════════════
+// SECTION 1: BASE REVENUE MEASURES
+// ════════════════════════════════════════════════════════════
+
+// Total revenue — the foundation measure all others build on
+Total Revenue =
+SUM ( fact_revenue[net_revenue] )
+
+
+// Total transactions
+Total Transactions =
+COUNTROWS ( fact_revenue )
+
+
+// Gross revenue (before tax)
+Gross Revenue =
+SUM ( fact_revenue[gross_revenue] )
+
+
+// Average transaction value
+Avg Transaction Value =
+DIVIDE (
+    [Total Revenue],
+    [Total Transactions],
+    0
+)
+
+
+// ════════════════════════════════════════════════════════════
+// SECTION 2: TIME INTELLIGENCE MEASURES
+// These require a proper date table connected to fact_revenue.
+// ════════════════════════════════════════════════════════════
+
+// Year-to-date revenue
+Revenue YTD =
+CALCULATE (
+    [Total Revenue],
+    DATESYTD ( dim_date[Date] )
+)
+
+
+// Revenue in the same period last year
+Revenue LY =
+CALCULATE (
+    [Total Revenue],
+    SAMEPERIODLASTYEAR ( dim_date[Date] )
+)
+
+
+// Year-on-year variance (absolute £)
+Revenue vs LY =
+[Total Revenue] - [Revenue LY]
+
+
+// Year-on-year variance (%)
+Revenue vs LY % =
+DIVIDE (
+    [Revenue vs LY],
+    [Revenue LY],
+    BLANK ()
+)
+
+
+// Month-to-date revenue
+Revenue MTD =
+CALCULATE (
+    [Total Revenue],
+    DATESMTD ( dim_date[Date] )
+)
+
+
+// Quarter-to-date revenue
+Revenue QTD =
+CALCULATE (
+    [Total Revenue],
+    DATESQTD ( dim_date[Date] )
+)
+
+
+// Prior month revenue (for MoM comparison)
+Revenue Prior Month =
+CALCULATE (
+    [Total Revenue],
+    PREVIOUSMONTH ( dim_date[Date] )
+)
+
+
+// Month-on-month variance %
+Revenue MoM % =
+DIVIDE (
+    [Total Revenue] - [Revenue Prior Month],
+    [Revenue Prior Month],
+    BLANK ()
+)
+
+
+// ════════════════════════════════════════════════════════════
+// SECTION 3: ROLLING AVERAGES
+// ════════════════════════════════════════════════════════════
+
+// 3-month rolling average
+Revenue Rolling 3M =
+CALCULATE (
+    AVERAGEX (
+        SUMMARIZE (
+            DATESINPERIOD (
+                dim_date[Date],
+                LASTDATE ( dim_date[Date] ),
+                -3,
+                MONTH
+            ),
+            dim_date[Year Month],
+            "Monthly Revenue", [Total Revenue]
+        ),
+        [Monthly Revenue]
+    )
+)
+
+
+// 12-month rolling average
+Revenue Rolling 12M =
+CALCULATE (
+    AVERAGEX (
+        SUMMARIZE (
+            DATESINPERIOD (
+                dim_date[Date],
+                LASTDATE ( dim_date[Date] ),
+                -12,
+                MONTH
+            ),
+            dim_date[Year Month],
+            "Monthly Revenue", [Total Revenue]
+        ),
+        [Monthly Revenue]
+    )
+)
+
+
+// ════════════════════════════════════════════════════════════
+// SECTION 4: RECONCILIATION MEASURES
+// ════════════════════════════════════════════════════════════
+
+// Total matched revenue
+Matched Revenue =
+CALCULATE (
+    [Total Revenue],
+    fact_revenue[reconciliation_status] = "MATCHED"
+)
+
+
+// Total unreconciled variance
+Unreconciled Value =
+SUMX (
+    FILTER ( fact_revenue, fact_revenue[reconciliation_status] <> "MATCHED" ),
+    ABS ( fact_revenue[source_vs_gl_variance] )
+)
+
+
+// Reconciliation rate %
+Reconciliation Rate % =
+DIVIDE (
+    [Matched Revenue],
+    [Total Revenue],
+    0
+) * 100
+
+
+// Exception count (non-matched transactions)
+Exception Count =
+CALCULATE (
+    COUNTROWS ( fact_revenue ),
+    fact_revenue[reconciliation_status] <> "MATCHED"
+)
+
+
+// Dynamic RAG status text
+RAG Status =
+VAR RecRate = [Reconciliation Rate %]
+RETURN
+    SWITCH (
+        TRUE (),
+        RecRate >= 99, "GREEN",
+        RecRate >= 95, "AMBER",
+        "RED"
+    )
+
+
+// RAG colour for conditional formatting
+RAG Colour =
+VAR RecRate = [Reconciliation Rate %]
+RETURN
+    SWITCH (
+        TRUE (),
+        RecRate >= 99, "#1A7A6E",   -- teal / green
+        RecRate >= 95, "#FFA500",   -- amber
+        "#CC0000"                   -- red
+    )
+
+
+// Missing in GL value
+Missing in GL =
+CALCULATE (
+    [Total Revenue],
+    fact_revenue[reconciliation_status] = "MISSING_IN_GL"
+)
+
+
+// GL variance amount
+GL Variance Amount =
+CALCULATE (
+    SUMX ( fact_revenue, ABS ( fact_revenue[source_vs_gl_variance] ) ),
+    fact_revenue[reconciliation_status] = "GL_VARIANCE"
+)
+
+
+// ════════════════════════════════════════════════════════════
+// SECTION 5: CUSTOMER MEASURES
+// ════════════════════════════════════════════════════════════
+
+// Distinct active customers in current period
+Active Customers =
+DISTINCTCOUNT ( fact_revenue[customer_id] )
+
+
+// Average revenue per active customer
+Avg Revenue per Customer =
+DIVIDE (
+    [Total Revenue],
+    [Active Customers],
+    0
+)
+
+
+// New customers (no revenue in prior 12 months)
+New Customers =
+VAR CurrentCustomers =
+    VALUES ( fact_revenue[customer_id] )
+VAR PriorCustomers =
+    CALCULATETABLE (
+        VALUES ( fact_revenue[customer_id] ),
+        DATESINPERIOD (
+            dim_date[Date],
+            MIN ( dim_date[Date] ) - 1,
+            -12,
+            MONTH
+        )
+    )
+RETURN
+    COUNTROWS (
+        EXCEPT ( CurrentCustomers, PriorCustomers )
+    )
+
+
+// Customer retention % (customers who bought in both periods)
+Customer Retention % =
+VAR CurrentCustomers =
+    VALUES ( fact_revenue[customer_id] )
+VAR PriorCustomers =
+    CALCULATETABLE (
+        VALUES ( fact_revenue[customer_id] ),
+        PREVIOUSMONTH ( dim_date[Date] )
+    )
+VAR RetainedCount =
+    COUNTROWS ( INTERSECT ( CurrentCustomers, PriorCustomers ) )
+VAR PriorCount =
+    COUNTROWS ( PriorCustomers )
+RETURN
+    DIVIDE ( RetainedCount, PriorCount, BLANK () ) * 100
+
+
+// ════════════════════════════════════════════════════════════
+// SECTION 6: DATE TABLE (create as a calculated table)
+// Go to: Modelling > New Table > paste this formula
+// Then mark as a Date Table in the Table Tools ribbon
+// ════════════════════════════════════════════════════════════
+
+// dim_date =
+// VAR MinDate = MIN ( fact_revenue[transaction_date] )
+// VAR MaxDate = MAX ( fact_revenue[transaction_date] )
+// RETURN
+// ADDCOLUMNS (
+//     CALENDAR ( MinDate, MaxDate ),
+//     "Year",          YEAR ( [Date] ),
+//     "Month Number",  MONTH ( [Date] ),
+//     "Month Name",    FORMAT ( [Date], "MMMM" ),
+//     "Month Short",   FORMAT ( [Date], "MMM" ),
+//     "Year Month",    FORMAT ( [Date], "yyyy-MM" ),
+//     "Quarter",       "Q" & FORMAT ( CEILING ( MONTH([Date]) / 3, 1 ), "0" ),
+//     "Year Quarter",  FORMAT ( [Date], "yyyy" ) & " Q" & FORMAT ( CEILING ( MONTH([Date]) / 3, 1 ), "0" ),
+//     "Week Number",   WEEKNUM ( [Date] ),
+//     "Day of Week",   FORMAT ( [Date], "dddd" ),
+//     "Is Weekday",    IF ( WEEKDAY ( [Date], 2 ) <= 5, TRUE, FALSE ),
+//     "Is Current Month", IF ( FORMAT([Date],"yyyy-MM") = FORMAT(TODAY(),"yyyy-MM"), TRUE, FALSE )
+// )
